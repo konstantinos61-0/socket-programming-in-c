@@ -16,10 +16,11 @@ void handle_connection(int);
 
 int main(int argc, char *argv[])
 {
-    struct sockaddr_storage their_addr;
-    socklen_t addrlen = sizeof(struct sockaddr_storage);
     int sockfd, new_sockfd;
     char ip[INET6_ADDRSTRLEN];
+
+    struct sockaddr_storage their_addr;
+    socklen_t addrlen = sizeof(struct sockaddr_storage);
 
     sockfd = bind_to_port(AF_UNSPEC, SOCK_STREAM, MY_PORT); // socket & bind calls in this function
 
@@ -42,7 +43,7 @@ int main(int argc, char *argv[])
         // Print peer IP from their_addr
         inet_ntop(their_addr.ss_family, get_sin_addr((struct sockaddr *) &their_addr), ip,
                   INET6_ADDRSTRLEN);
-        printf("server: Established connection with %s\n", ip);
+        printf("Established connection with %s\n", ip);
 
         handle_connection(new_sockfd);
         close(new_sockfd);
@@ -55,11 +56,11 @@ void handle_connection(int sockfd)
         1. Read data from the sockfd
         2. Send the same data back to the socket
     */
-    int bytes_received;
+    int bytes_received, len;
     char buf[BUFF_SIZE];
     while ((bytes_received = recv(sockfd, buf, BUFF_SIZE, 0)) > 0)
     {
-        int len = bytes_received;
+        len = bytes_received;
         if (send_all(sockfd, buf, &len) == -1)
         {
             perror("server send");

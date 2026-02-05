@@ -15,6 +15,8 @@
 #define BACKLOG 5
 #define BUFF_SIZE 4096
 
+
+
 int send_all(int, char *, int *);
 int bind_to_port(int family, int socktype, const char *port);
 void *get_sin_addr(struct sockaddr *p);

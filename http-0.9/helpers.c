@@ -65,6 +65,9 @@ void *get_sin_addr(struct sockaddr *sa)
         return &((struct sockaddr_in6 *) sa)->sin6_addr;
 }
 
+
+// Attempt to send len ammount of bytes from buf to sockfd through a the network connection
+// At success return 0. At failure return -1. In any case, len is set to the number of bytes actually sent.
 int send_all(int sockfd, char *buf, int *len)
 {
     int total_sent = 0;
@@ -84,3 +87,4 @@ int send_all(int sockfd, char *buf, int *len)
     *len = total_sent;
     return 0;
 }
+
