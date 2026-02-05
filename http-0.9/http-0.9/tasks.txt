@@ -1,0 +1,4 @@
+I need to implement some functions for my http/0.9 server to work
+1. A function that fully reads an http/0.9 request into a buffer
+2. A function that reads the request line by line
+3. A function that reads each request line and fills a response buffer.
