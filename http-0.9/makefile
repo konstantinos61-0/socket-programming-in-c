@@ -13,8 +13,5 @@ $(TARGET) : $(OBJECTS)
 	$(CC) $(CFLAGS) -o $@ $^ 
 
 
-.PHONY: clean
 
-clean:
-    @rm -f $(TARGET) $(OBJECTS) core
 

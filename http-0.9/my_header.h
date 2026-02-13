@@ -26,6 +26,6 @@ int bind_to_port(int family, int socktype, const char *port);
 void *get_sin_addr(struct sockaddr *p);
 
 // Helper functions associated with request/response handling
-void serve(char *filename, int root_dir, char *buf, int *len);
+int serve(char *filename, int root_dir, char *buf, int *len);
 char *read_input(char *buf, char **current);
 int read_request(int client_sockfd, char *buf, int *len);

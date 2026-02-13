@@ -6,7 +6,7 @@
 int main(int argc, char *argv[])
 {
     struct sockaddr_storage their_addr;
-    socklen_t addrlen = sizeof(struct sockaddr_storage);
+    socklen_t addrlen;
     int server_sockfd, client_sockfd, root_dir;
     char *port;
     char ip[INET6_ADDRSTRLEN];
@@ -52,10 +52,21 @@ int main(int argc, char *argv[])
             perror("server error(accept): ");
             continue;
         }
+        if (their_addr.ss_family == AF_INET)
+        {
+            inet_ntop(AF_INET, get_sin_addr((struct sockaddr *)&their_addr), ip, INET6_ADDRSTRLEN);
+            printf("Connection Established with client at address: %s\n", ip);
+        }
+        else
+        {
+            inet_ntop(AF_INET6, get_sin_addr((struct sockaddr *)&their_addr), ip, INET6_ADDRSTRLEN);
+            printf("Connection Established with client at address: %s\n", ip);
+        }
 
         // Handle connection
         handle_connection(client_sockfd, root_dir);
         close(client_sockfd);
+        printf("Closed connection with %s\n", ip);
     }
 
     close(server_sockfd);

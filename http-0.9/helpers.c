@@ -152,19 +152,22 @@ int read_request(int client_sockfd, char *buf, int *len)
 */
 char *read_input(char *buf, char **current)
 {
-    if (*current == NULL)
-        *current = buf;
     size_t len = 0;
     char *word = malloc(sizeof(char));
-
+    if (*current == NULL)
+        *current = buf;
+    if (word == NULL)
+        return NULL;
     while (**current == ' ')
         (*current)++;
-    if (**current == '\r' && **(current + 1) == '\n')
-    {
-        word = realloc(word, 3);
+    if (**current == '\r' && *(*current + 1) == '\n') // We never expect any \r characters not being followed by \n
+    {                                                 // But i check anyways.
+        word = realloc(word, 3);    
+        if (word == NULL)
+            return NULL;
         word[0] = '\r';
         word[1] = '\n';
-        word[3] = '\0';
+        word[2] = '\0';
         return word;
     }
 
@@ -174,6 +177,8 @@ char *read_input(char *buf, char **current)
         len++;
         (*current)++;
         word = realloc(word, len + 1);
+        if (word == NULL)
+            return NULL;
     }
     *(word + len) = '\0';
     return word;
@@ -183,13 +188,19 @@ char *read_input(char *buf, char **current)
     Serves the file named as string filename from root_dir. "Serves" in this function means
     filling up the buffer with the contents of the file, dynamically reallocating memory as needed.
 */
-void serve(char *filename, int root_dir, char *buf, int *len)
+int serve(char *filename, int root_dir, char *buf, int *len)
 {
     int filefd = openat(root_dir, filename, O_RDONLY);
     int bytes_total = 0;
     int bytes_read;
     int space_left = *len;
     int n = 2;
+
+    if (filefd == -1)
+    {
+        perror("server open");
+        return -1;
+    }
 
     while ((bytes_read = read(filefd, buf + bytes_total, space_left)) > 0)
     {
@@ -204,4 +215,6 @@ void serve(char *filename, int root_dir, char *buf, int *len)
         }
     }
     *len = bytes_total;
+    printf("Served %s\n", filename);
+    return 0;
 }
