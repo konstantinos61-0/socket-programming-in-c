@@ -34,7 +34,7 @@ Outputs:
 
 - The output alphabet is any raw data byte (ASCII or not)
 - store x: Store output string x as a program variable 
-- buffer x: Load output string x in the response buffer
+- socket x: Send output string x over the TCP connection to the client.
 
 States:
 

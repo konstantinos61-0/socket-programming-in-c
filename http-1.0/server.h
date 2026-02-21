@@ -1,0 +1,82 @@
+#include <stdio.h> 
+#include <stdlib.h>
+#include <string.h> 
+#include <ctype.h>
+
+#include <sys/socket.h> 
+#include <sys/types.h>
+
+#include <arpa/inet.h> 
+#include <netinet/in.h> 
+#include <netdb.h>
+
+#include <stdint.h>     
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+
+// socket 
+#define MY_PORT "8080"
+#define BACKLOG 5
+#define BUFF_SIZE 256
+#define MAX_REALLOC 5
+
+// Parser FSM
+#define INPUTS 128
+#define STATES FAILURE + 1
+enum states {
+    M,
+    M_G, M_E, M_T,
+    M_P, M_O, M_S, M_T2,
+    M_H, M_E2, M_A, M_D,
+    URI, URI_CHAR,
+    V,
+    V_H, V_T1, V_T2, V_P, V_SLASH, V_MAJOR,V_DOT, V_MINOR,
+    CR, SUCCESS,
+    FAILURE, 
+};
+
+
+
+// Lengths of various HTTP contructs
+#define RESPONSE_LINE_LEN 256
+#define FILENAME_LEN 256
+#define HEADER_FIELD_LEN 256
+#define HEADER_VALUE_LEN 256
+
+// structs
+
+// For Parser output (FSM transducer)
+struct response_line {
+    int code;
+    char *phrase;
+    char *msg;
+};
+
+// For headers' linked list
+typedef struct header_node {
+    char header_field[HEADER_FIELD_LEN];
+    char header_value[HEADER_VALUE_LEN];
+    struct header_node *next;
+} header_node;
+
+
+
+
+// Prototypes
+
+// Parser functions
+void handle_connection(int client_sockfd, int root_dir, int trans[STATES - 2][INPUTS]);
+void fill_transitions(int trans[STATES - 2][INPUTS]);
+header_node *push_node(header_node *list, header_node *n);
+
+// Helper functions associated directly with sockets
+int send_all(int client_sockfd, char *buf, int *len);
+int bind_to_port(int family, int socktype, const char *port);
+void *get_sin_addr(struct sockaddr *p);
+
+// Helper functions associated with request/response handling
+int serve(char *filename, int root_dir, char *buf, int *len);
+int read_request(int client_sockfd, char *buf, int *len);
+char *mime_type(char *filename);
+int serve_error_template(int client_fd, int filefd, char *msg);
