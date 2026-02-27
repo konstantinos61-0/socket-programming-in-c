@@ -3,12 +3,17 @@
     Creates a socket of family and socktype and binds it at a local port. Returns the socket 
     descriptor. On fatal error, it prints the error message on stderr and returns -1
 */
+#define SUPP_RESP_HEADS 3
+char *supported_response_headers[] = {
+    "content-type", "content-length", "connection" // In a chosen canonical form of all lowercase, for use in comparisons etc.
+};
 
 int bind_to_port(int family, int socktype, const char *port)
 {
     int status, server_sockfd, yes;
     struct addrinfo hints, *p, *res;
     yes = 1;
+    char ip[INET6_ADDRSTRLEN];
 
     // Prepare the getaddrinfo call
     memset(&hints, '\0', sizeof hints);
@@ -46,6 +51,17 @@ int bind_to_port(int family, int socktype, const char *port)
             close(server_sockfd);
             continue;
         }
+        printf("Listening for connections on port %s...\n", port);
+        if (p->ai_family == AF_INET)
+        {
+            inet_ntop(AF_INET, get_sin_addr(p->ai_addr), ip, INET6_ADDRSTRLEN);
+            printf("Available in http://%s:%s/\n\n", ip,port);
+        }
+        else
+        {
+            inet_ntop(AF_INET6, get_sin_addr(p->ai_addr), ip, INET6_ADDRSTRLEN);
+            printf("Available in http://%s:%s/\n\n", ip,port);
+        }
         break;
     }
     freeaddrinfo(res); 
@@ -74,8 +90,7 @@ void *get_sin_addr(struct sockaddr *sa)
 */
 int send_all(int client_sockfd, char *buf, int *len)
 {
-    int bytes_total = 0;
-    int bytes_sent;
+    int bytes_total = 0, bytes_sent;
     while (bytes_total < *len)
     {
         // try to send data
@@ -147,27 +162,84 @@ int read_request(int client_sockfd, char **buf, int *len)
         return -2;
     }
 }
-// Inserts header_node n into header_node linked list
+// Inserts header_node n into the top of the header_node stack (linked list)
 // On success, returns the pointer to the first list item (pointed to by list variable)
-// Returns NULL on error
-header_node *push_node(header_node *list, header_node *n)
+void push_node(header_node **list, header_node *n)
 {
-    
+    header_node *tmp = *list; // Save the 1st item (where list points) in a tmp var
+    *list = n; // Make list point to the new header node n
+    n->next = tmp; // Make n point to the tmp to stitch the list back in the correct way   
 }
 
+// Prints the linked list of header nodes
+void print_list(header_node *list)
+{
+    for (header_node *p = list; p != NULL; p = p->next)
+        printf("%s: %s\n", p->header_field, p->header_value);
+}
+
+// Frees the linked list of header nodes
+void free_list(header_node *list)
+{
+    header_node *ptr = list;
+    while (ptr != NULL)
+    {
+        header_node *next = ptr->next;
+        free(ptr);
+        ptr = next;
+    }
+}
+
+// Fills list with supported, valid response headers. Systematic Response header handling
+void fill_response_headers(int filefd, char *filename, header_node **list, int *msg_len)
+{
+    for (int i = 0; i < SUPP_RESP_HEADS; i++)
+    {
+        if (!strcmp(supported_response_headers[i], "content-type")) 
+        {
+            header_node *n = malloc(sizeof(header_node));
+            strcpy(n->header_field, "Content-Type");
+            strcpy(n->header_value, mime_type(filename));
+            push_node(list, n);
+        }
+        else if (!strcmp(supported_response_headers[i], "connection"))
+        {
+            header_node *n = malloc(sizeof(header_node));
+            strcpy(n->header_field, "Connection");
+            strcpy(n->header_value, "close");
+            push_node(list, n);
+        }
+        else if (!strcmp(supported_response_headers[i], "content-length"))
+        {
+            struct stat statbuf;
+            if (fstat(filefd, &statbuf) == -1)
+                continue;
+            header_node *n = malloc(sizeof(header_node));
+            strcpy(n->header_field, "Content-Length");
+            // Find length
+            char length_s[10];
+            long int length = (msg_len) ? (statbuf.st_size + *msg_len) : statbuf.st_size;
+            sprintf(length_s, "%li", length);
+            strcpy(n->header_value, length_s);
+            push_node(list, n);
+        }
+    }
+
+
+}
+
+
+// Returns the MIME/type of filename
 char *mime_type(char *filename)
 {
-    int filename_len = strlen(filename);
     int ext_len;
     char *ext, *dot;
-    if (filename_len == 0)
-        return NULL;
     if ((dot = strstr(filename, ".")) == NULL)
-        return NULL;
+        return "application/octet-stream";
     ext= dot + 1;
     ext_len = strlen(ext);
     if (ext_len == 0)
-        return NULL;
+        return "application/octet-stream";
     char *lowerc_ext = malloc (ext_len + 1);
     for (int i = 0; i < ext_len + 1; i++)
     {
@@ -203,17 +275,25 @@ char *mime_type(char *filename)
         free(lowerc_ext);
         return "application/pdf";
     }
+    else if (!strcmp(lowerc_ext, "css"))
+    {
+        free(lowerc_ext);
+        return "text/css";
+    }
     else
     {
         free(lowerc_ext);
         return "application/octet-stream";
     }
 }
-// Sends the filefd's contents to the client socket
-//  after inserting msg into the  <p id="msg"> tag of the file. 
-// In the function's use, filefd is passed by default as the error.html template in the templates folder,
-// Returns 0 on success, -1 on error. 
-int serve_error_template(int client_fd, int filefd, char *msg)
+
+/*
+    Sends the filefd's contents to the client socket as well as all response headers beforehand.
+    after inserting msg into the  <p id="msg"> tag of the file. 
+    In the function's use, filefd is passed by default as the error.html template in the templates folder,
+    Returns 0 on success, -1 on error.
+*/  
+int serve_error_template(int client_sockfd, int filefd, char *msg, char *filename)
 {
     /*
         1. Read until you find the <p id="msg"> memory chunck inside error.html, sending everything you read into the socket.
@@ -222,13 +302,24 @@ int serve_error_template(int client_fd, int filefd, char *msg)
         3. Set offset of filefd to the saved value
         4. Send the rest of the file to the socket (the rest of the original file, closing the <p> tag on the way)
     */
-    char *tag = "<p id=\"msg\"";
-    int msg_len = strlen(msg);
-    int offset = 0;
-    int bytes_read, bytes_total;
-    bytes_total = 0;
-    char *p = NULL;
+    int msg_len = strlen(msg), offset = 0, bytes_read;
+    char *tag = "<p id=\"msg\"", *p = NULL;
     char buf[BUFF_SIZE * sizeof(char)];
+    header_node *res_h_list = NULL;
+
+    // Send response headers
+    fill_response_headers(filefd, filename, &res_h_list, &msg_len); // Fill and send response headers 
+    // Loop into linked list and send each
+    for (header_node *p = res_h_list; p != NULL; p = p->next)
+    {
+        char resp_header[MAX_HEADER_FIELD + MAX_HEADER_VALUE + 5]; // +4 for the 4 extra chars from field, value. +1 for '\0'
+        sprintf(resp_header,"%s: %s\r\n", p->header_field, p->header_value);
+        int rhlen = strlen(resp_header);
+        send_all(client_sockfd, resp_header, &rhlen);
+    }
+    char *crlf = "\r\n";
+    int crlf_len = strlen(crlf);
+    send_all(client_sockfd, crlf, &crlf_len);
 
     while ((bytes_read = read(filefd, buf, BUFF_SIZE * sizeof(char))) > 0)
     {
@@ -236,25 +327,25 @@ int serve_error_template(int client_fd, int filefd, char *msg)
         {
             int offset_inc = (p - buf + 1) + strlen(tag);
             offset = offset + offset_inc; // offset equals the amount of bytes read before reaching the end of the opening tag (last char included).
-            send_all(client_fd, buf, &offset_inc);
+            send_all(client_sockfd, buf, &offset_inc);
             break;
         }
         else
         {
             offset += bytes_read;
-            send_all(client_fd, buf, &bytes_read);
+            send_all(client_sockfd, buf, &bytes_read);
         }
 
     }
     if (bytes_read == -1)
         return -1;
     
-    send_all(client_fd, msg, &msg_len);
+    send_all(client_sockfd, msg, &msg_len);
 
     lseek(filefd, offset, SEEK_SET);
     while ((bytes_read = read(filefd, buf, BUFF_SIZE * sizeof(char))) > 0)
     {
-        send_all(client_fd, buf, &bytes_read);
+        send_all(client_sockfd, buf, &bytes_read);
     }
     if (bytes_read == -1)
         return -1;

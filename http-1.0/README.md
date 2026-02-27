@@ -49,5 +49,9 @@ States:
 - URI: Request-URI has just been read
 - End: When the machine Reaches this state it has completed its functionality and thus its operation is terminated.
 
+Included response headers:
+Connection: close (don't support persistent connections)
 
 
+
+Used Valgrind to make it run memcheck clean

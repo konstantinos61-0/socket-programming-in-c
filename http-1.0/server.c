@@ -42,7 +42,6 @@ int main(int argc, char *argv[])
         perror("server error(listen): ");
         return 4;
     }
-    printf("Listening for connections on port %s...\n\n", port);
 
     while (1) 
     { // Accept Loop, blocking call socketfd mode
@@ -62,15 +61,11 @@ int main(int argc, char *argv[])
             inet_ntop(AF_INET6, get_sin_addr((struct sockaddr *)&their_addr), ip, INET6_ADDRSTRLEN);
             printf("Connection Established with client at address: %s\n", ip);
         }
-        // Create FSM Transition Table as a 2D Array
-        int trans[STATES][INPUTS];
-        fill_transitions(trans);
         // Handle connection
-        handle_connection(client_sockfd, root_dir, trans);
+        handle_connection(client_sockfd, root_dir);
         close(client_sockfd);
         printf("Closed connection\n\n" );
     }
-
     close(server_sockfd);
     close(root_dir);
     return 0;
