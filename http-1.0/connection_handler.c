@@ -1,4 +1,6 @@
 #include "server.h"
+
+// ready-to-use response line struct variables
 struct response_line c200 = {
     200, "OK", NULL
 };
@@ -23,19 +25,12 @@ struct response_line c501 = {
     501, "Not Implemented", "501: Not Implemented"
 };
 
-
-
-
 /*
-    Notes:
-    1. Didn't include error checking 500 answer to send_all, openat for templates.
-    Prothikes
-    2. Include % URI Decoding?
-    3. Serve index for every subfolder as with root dir? Could be better implementation
-*/ 
-/*
-    This function implements the Parser (FSM) + Sends the response back
+    This file contains only this function.
+    It implements the Parser (according to the Finite state transducer abstract software model specified in the README) 
+    and sends the back a properresponse.
     It runs once for each connection.
+    On socket send/recv error, a clean up is performed and the connection is closed.
 */
 void handle_connection(int client_sockfd, int root_dir) 
 {   
@@ -55,26 +50,34 @@ void handle_connection(int client_sockfd, int root_dir)
     int n_method = 0, n_vers = 0, n_uri = 0, n_field = 0, n_value = 0;
     char method[MAX_METHOD + 1], vers[VERSION_LEN + 1];
     struct response_line results;
-    enum states state = INI, old_state;
+    enum states state = METHOD, old_state;
     header_node *req_h_list = NULL, *res_h_list = NULL, *n;
     memset(&results, '\0', sizeof results);
 
     if (req_buf == NULL)
     {
         results = c500;
-        state = FAILURE;
+        state = FAILURE; // Causes a 500 response before any request parsing
     }
 
+    // Only on successful req_buf mem allocation, continue to read the request.
     if (req_buf != NULL && (m = read_request(client_sockfd, &req_buf, &req_len)) == -1)// recv error 
     {
         results = c500;
-        state = FAILURE;
+        state = FAILURE; 
     }
     else if (m == -2) // Client closed connection prematurely
     {
         free(req_buf);
+        close(client_sockfd);
         return;
     } 
+    else if (m == -3)
+    {
+        results = c400;
+        results.msg = "Request exceeded size limit";
+        state = FAILURE;
+    }
     // Character Input, one at a time
     char *current = req_buf;
 
@@ -85,9 +88,6 @@ void handle_connection(int client_sockfd, int root_dir)
         old_state = state;
         switch (state)
         {
-            case INI:
-                ini_trans(&current, &state);
-                continue; // The transition function logic decides if the current input will be consumed (current++)
             case METHOD:
                 method_trans(*current, &state, &n_method, method);
                 break;
@@ -104,9 +104,9 @@ void handle_connection(int client_sockfd, int root_dir)
                 lf_trans(&current, &state, &n_field);
                     if (state == HF && old_state == LF)
                         n = malloc(sizeof(header_node));
-                continue;
+                continue; // The current input is incremented (or not, depending on input) inside the lf_trans 
             case HF:
-                hf_trans(&current, &state, &n_field, &n_value, n); 
+                hf_trans(*current, &state, &n_field, &n_value, n); 
                 break; 
             case HVAL:
                 hval_trans(*current, &state, &n_value, n, &req_h_list);
@@ -117,7 +117,7 @@ void handle_connection(int client_sockfd, int root_dir)
         }
         current++; 
     } // End Request-Line Parser Loop
-
+    
     free(req_buf);
     // Set results structure to the correct corresponding response code (cxxx e.g. c200 for 200 OK)
 
@@ -127,14 +127,14 @@ void handle_connection(int client_sockfd, int root_dir)
         results = c400;
 
     // Extract filename from URI. Filename always corresponds to the file referenced by the uri. Doesn't change
-    if (!strcmp(uri, "/"))
+    if (!strcmp(uri, "/")) // uri = /
         strcpy(filename_original, "index.html");
-    else if (uri[strlen(uri) - 1] == '/')
+    else if (uri[strlen(uri) - 1] == '/') // uri ends in /
     {
         char tmp[strlen(uri) + strlen("index.html")];
         sprintf(tmp, "%s%s", (uri + 1), "index.html");
         strcpy(filename_original, tmp);
-    }
+    } // uri doesnt end in /
     else
         strcpy(filename_original, (uri + 1));
 
@@ -158,6 +158,18 @@ void handle_connection(int client_sockfd, int root_dir)
         else if (filefd == -1)
             results = c500;
     }
+    // Check if the filefd opened a directory, and extract its index.html as the filename_original.
+    struct stat sb;
+    if (filefd != -1 && fstat(filefd, &sb) != -1)
+    {
+        if ((sb.st_mode & S_IFMT) == S_IFDIR)
+        {
+            char tmp_2[strlen(filename_original) + strlen("index.html") + 2];
+            sprintf(tmp_2, "%s/%s", filename_original, "index.html");
+            strcpy(filename_original, tmp_2);
+            filefd = openat(root_dir, filename_original, O_RDONLY);
+        }
+    }
 
     // Check  for not implemented method and modify results accordingly
     if (results.code == 200)
@@ -171,12 +183,12 @@ void handle_connection(int client_sockfd, int root_dir)
     // results is now set to the correct corresponding code value cxxx.
 
     // Open the correct error template if there is an error code
-    if (results.code == 500 && results.code != 200)
+    if (results.code == 500)
     {
         strcpy(filename_final, "templates/internal_error.html");
         filefd = openat(root_dir, "templates/internal_error.html", O_RDONLY);
     }     
-    else if (results.code != 500 && results.code != 200)
+    else if (results.code != 200)
     {
         strcpy(filename_final, "templates/error.html");
         filefd = openat(root_dir, "templates/error.html", O_RDONLY);
@@ -186,7 +198,7 @@ void handle_connection(int client_sockfd, int root_dir)
     
     // filefd exists either as error html template or as the valid filename to be served.
     // filename_final is the name of the file to be served. Its only different than the original
-    // on case of an error status code.
+    // in case of an error status code.
 
     
     
@@ -198,7 +210,13 @@ void handle_connection(int client_sockfd, int root_dir)
     int bytes_read;
     sprintf(response_line, "HTTP/1.0 %i %s\r\n", results.code, results.phrase);
     int res_line_len = strlen(response_line);
-    send_all(client_sockfd, response_line, &res_line_len);
+    if (send_all(client_sockfd, response_line, &res_line_len) == -1)
+    {
+        perror("server send");
+        close(client_sockfd);
+        close(filefd);
+        return;
+    }
 
     // Send response file / error template 
     if (results.code != 200 && results.code != 500)
@@ -206,10 +224,7 @@ void handle_connection(int client_sockfd, int root_dir)
         if (serve_error_template(client_sockfd, filefd, results.msg, filename_final) != -1) // Serves the headers as well
         {
             // Diagnostic info printed to server's terminal
-            if (results.code == 400)
-                printf("\033[31m%i %s\n\033[0m", results.code, results.phrase);
-            else
-                printf("\033[31m%s %i %s %s\n\033[0m", filename_original, results.code, method, results.phrase);
+            printf("\033[31m%s %s %i %s\n\033[0m", method, filename_original, results.code, results.phrase);
             close(filefd);
             return;
         }
@@ -230,25 +245,50 @@ void handle_connection(int client_sockfd, int root_dir)
         char resp_header[MAX_HEADER_FIELD + MAX_HEADER_VALUE + 5]; // +4 for the 4 extra chars from field, value. +1 for '\0'
         sprintf(resp_header,"%s: %s\r\n", p->header_field, p->header_value);
         int rhlen = strlen(resp_header);
-        send_all(client_sockfd, resp_header, &rhlen);
+        if (send_all(client_sockfd, resp_header, &rhlen) == -1)
+        { 
+            perror("server send");
+            close(client_sockfd);
+            close(filefd);
+            free_list(req_h_list);
+            free_list(res_h_list);
+            return;
+        }
     }
     char *crlf = "\r\n";
     int crlf_len = strlen(crlf);
-    send_all(client_sockfd, crlf, &crlf_len);
+    if (send_all(client_sockfd, crlf, &crlf_len) == -1)
+    {
+        perror("server send");
+        close(client_sockfd);
+        close(filefd);
+        return;
+    }
 
     // Send file contents
     while ((bytes_read = read(filefd, res_buf, res_len)) > 0)
     {
-       send_all(client_sockfd, res_buf, &bytes_read); 
+        if (send_all(client_sockfd, res_buf, &bytes_read) == -1)
+        {
+            close(client_sockfd);
+            close(filefd);
+            perror("server send");
+            return;
+        } 
+    }
+    if (bytes_read == -1)
+    {
+        close(client_sockfd);
+        close(filefd);
+        perror("server read");
+        return;
     }
     
     // Diagnostic info printed to server's terminal
     if (results.code == 200)
-        printf("\033[32mserved %s\n\033[0m", filename_original);
-    else if (results.code == 400)
-        printf("\033[31m%i %s\n\033[0m", results.code, results.phrase);
+        printf("\033[32m%s %s %i %s\n\033[0m", method, filename_original, results.code, results.phrase);
     else
-        printf("\033[31m%s %i %s %s\n\033[0m", filename_original, results.code, method, results.phrase);
+        printf("\033[31m%s %s %i %s\n\033[0m", method, filename_original, results.code, results.phrase);
 
     close(filefd);
     free_list(req_h_list);

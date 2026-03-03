@@ -19,6 +19,7 @@
 #include <errno.h>
 
 
+// Macros, global variables
 
 // socket 
 #define MY_PORT "8080"
@@ -26,11 +27,11 @@
 #define BUFF_SIZE 256
 #define MAX_REALLOC 5
 
-// Parser FSM
+// Parser (FSM) 
 #define INPUTS 128
 #define STATES FAILURE + 1
 enum states {
-    INI, METHOD, URI, VERSION, CR, LF, HF, HVAL, CR_F, LF_F, FAILURE
+    METHOD, URI, VERSION, CR, LF, HF, HVAL, CR_F, LF_F, FAILURE
 };
 
 
@@ -48,14 +49,14 @@ enum states {
 
 // structs
 
-// For Parser output (FSM transducer)
+// Response information
 struct response_line {
     int code;
     char *phrase;
     char *msg;
 };
 
-// For headers' linked list
+// Represent a specific header field name - value pair
 typedef struct header_node {
     char header_field[MAX_HEADER_FIELD + 1];
     char header_value[MAX_HEADER_VALUE + 1];
@@ -67,15 +68,15 @@ typedef struct header_node {
 
 // Prototypes
 
-// Parser functions
 void handle_connection(int client_sockfd, int root_dir);
-void ini_trans(char **current, enum states *state);
+
+// Parser functions
 void method_trans(char current, enum states *state, int *n, char *method);
 void uri_trans(char current, enum states *state, int *n, char *filename);
 void vers_trans(char current, enum states *state, int *n, char *vers);
 void cr_trans(char current, enum states *state);
 void lf_trans(char **current, enum states *state, int *n);
-void hf_trans(char **current, enum states *state, int *n, int *n_value, header_node *node);
+void hf_trans(char current, enum states *state, int *n, int *n_value, header_node *node);
 void hval_trans(char current, enum states *state, int *n, header_node *node, header_node **list);
 void cr_f_trans(char current, enum states *state);
 

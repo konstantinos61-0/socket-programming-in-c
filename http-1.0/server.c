@@ -21,9 +21,7 @@ int main(int argc, char *argv[])
     if (argc == 2)
         port = MY_PORT;
     else
-    {
         port = argv[2];
-    }
 
     // Root directory configuration
     if ((root_dir = open(argv[1], O_RDONLY)) == -1)
@@ -33,9 +31,7 @@ int main(int argc, char *argv[])
     }
 
     if ((server_sockfd = bind_to_port(AF_UNSPEC, SOCK_STREAM, port)) == -1) // socket & bind call
-    {
         return 4;
-    } 
 
     if (listen(server_sockfd, BACKLOG) == -1) // listen call
     {

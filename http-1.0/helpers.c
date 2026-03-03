@@ -1,13 +1,14 @@
 #include "server.h"
-/*
-    Creates a socket of family and socktype and binds it at a local port. Returns the socket 
-    descriptor. On fatal error, it prints the error message on stderr and returns -1
-*/
+
 #define SUPP_RESP_HEADS 3
 char *supported_response_headers[] = {
     "content-type", "content-length", "connection" // In a chosen canonical form of all lowercase, for use in comparisons etc.
 };
 
+/*
+    Creates a socket of family and socktype and binds it at a local port. Returns the socket 
+    descriptor. On fatal error, it prints the error message on stderr and returns -1
+*/
 int bind_to_port(int family, int socktype, const char *port)
 {
     int status, server_sockfd, yes;
@@ -85,8 +86,9 @@ void *get_sin_addr(struct sockaddr *sa)
 
 
 /*
-    Attempt to send len ammount of bytes from buf to sockfd through a the network connection
-    At success return 0. At failure return -1. In any case, len is set to the number of bytes actually sent.
+    Attempt to send len ammount of bytes from buf to sockfd through the network connection
+    At success return 0. At send error return -1. 
+    In any case, len is set to the number of bytes actually sent.
 */
 int send_all(int client_sockfd, char *buf, int *len)
 {
@@ -109,13 +111,14 @@ int send_all(int client_sockfd, char *buf, int *len)
 
 
 /*
-    Reads the HTTP/0.9 request into a static sized buffer and sets *len to the actual size of the request.
-    On error, prints error message on stderr and returns -1
-    An error happens if one of the below happen:
-        1. Buffer got full before encoutering the end of a request
-        2. Client closed connection before encountering the end of a request
-        3. Got error from recv
+    Reads the HTTP request into a dynamically sized buffer and sets *len to the actual size of the request.
+    On error, returns an integer status code and possibly logs an error message on stderr.
+    Error Codes:
+    -1: Server code error (meaning other than recv)
+    -2: Client error: Recv error or premature client connection close. 
+    -3: Request exceeded allowed size limit. 
 
+    Algorithm
     1. While (total bytes read < buffer length && there are bytes available in the socket stream)
         2. Read the bytes into the buffer by only loading them after the last read character of last loop's repetition.
         3. If CRLF CRLF is found in the buffer
@@ -127,7 +130,7 @@ int send_all(int client_sockfd, char *buf, int *len)
 int read_request(int client_sockfd, char **buf, int *len)
 {
     int bytes_received, bytes_total;
-    int n = 2; // Buffer Reallocation factor, startinf at 2, meaning first reallocation happens with 2 * BUFF_SIZE 
+    int n = 2, ralloc = 0; // Buffer Reallocation factor, startinf at 2, meaning first reallocation happens with 2 * BUFF_SIZE 
     bytes_total = 0;
     while ((bytes_received = recv(client_sockfd, *buf + bytes_total, *len - bytes_total, 0)) > 0)
     {
@@ -141,7 +144,12 @@ int read_request(int client_sockfd, char **buf, int *len)
         if (bytes_total >= *len)
         {
             // Reallocate more memory.
+            if  (ralloc > MAX_REALLOC)
+            {
+                return -3;
+            }
             char *tmp = realloc(*buf, n * BUFF_SIZE * sizeof(char));
+            ralloc++;
             if (tmp == NULL)
             {
                 return -1;
@@ -154,7 +162,7 @@ int read_request(int client_sockfd, char **buf, int *len)
     if (bytes_received == -1)
     {
         perror("server recv");
-        return -1;
+        return -2;
     }
     else
     {
@@ -344,9 +352,7 @@ int serve_error_template(int client_sockfd, int filefd, char *msg, char *filenam
 
     lseek(filefd, offset, SEEK_SET);
     while ((bytes_read = read(filefd, buf, BUFF_SIZE * sizeof(char))) > 0)
-    {
         send_all(client_sockfd, buf, &bytes_read);
-    }
     if (bytes_read == -1)
         return -1;
 
