@@ -1,7 +1,8 @@
-#include "my_header.h"
+#include "server.h"
 /*
     Usage: server root_dir [port]
 */
+void sigchld_handler(int signo); 
 
 int main(int argc, char *argv[])
 {
@@ -21,9 +22,7 @@ int main(int argc, char *argv[])
     if (argc == 2)
         port = MY_PORT;
     else
-    {
         port = argv[2];
-    }
 
     // Root directory configuration
     if ((root_dir = open(argv[1], O_RDONLY)) == -1)
@@ -33,17 +32,24 @@ int main(int argc, char *argv[])
     }
 
     if ((server_sockfd = bind_to_port(AF_UNSPEC, SOCK_STREAM, port)) == -1) // socket & bind call
-    {
         return 4;
-    } 
 
     if (listen(server_sockfd, BACKLOG) == -1) // listen call
     {
         perror("server error(listen): ");
-        return 4;
+        return 5;
     }
-    printf("Listening for connections on port %s...\n\n", MY_PORT);
 
+    struct sigaction act;
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = SA_RESTART; // If signal interupts sys calls, restart them (accept sys call protection inside accept loop)
+    act.sa_handler = sigchld_handler; 
+
+    if (sigaction(SIGCHLD, &act, NULL) == -1) // set act as the sigaction of SIGCHLD
+    {
+        perror("server sigaction");
+        exit(6);
+    }
     while (1) 
     { // Accept Loop, blocking call socketfd mode
         addrlen = sizeof(struct sockaddr_storage);
@@ -62,17 +68,34 @@ int main(int argc, char *argv[])
             inet_ntop(AF_INET6, get_sin_addr((struct sockaddr *)&their_addr), ip, INET6_ADDRSTRLEN);
             printf("Connection Established with client at address: %s\n", ip);
         }
-
-        // Handle connection
-        handle_connection(client_sockfd, root_dir);
-        close(client_sockfd);
-        printf("Closed connection with %s\n", ip);
+        int child_id;
+        if ((child_id = fork()) == 0)
+        { // Inside child process
+            // Handle connection
+            close(server_sockfd); // child doesn't need the listener 
+            handle_connection(client_sockfd, root_dir);
+            close(client_sockfd);
+            printf("Closed connection\n\n" );
+            exit(0);
+        }
+        else if (child_id == -1)
+        {
+            perror("server fork");
+        }
+        close(client_sockfd); // parent doesn't need the client socket
     }
-
     close(server_sockfd);
     close(root_dir);
     return 0;
 }
 
 
+// Handler for the SIGCHLD signal (child termination) so that server clears any zombie processes.
+void sigchld_handler(int signo)
+{
+    (void)signo; // quiet the warning about unused signo variable.
 
+    int restore_errno = errno;
+    while(waitpid(-1, NULL, WNOHANG) > 0); // Non-blocking call, wait for any child process.
+    errno = restore_errno; // Restore global errno in case waitpid changed it.
+}

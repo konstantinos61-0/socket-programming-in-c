@@ -1,7 +1,6 @@
 #include "server.h"
 /* 
-    states: METHOD, URI, VERSION, CR, LF, HF, HVAL, CR_F, LF_F, FAILURE
-    Reflect the structure of the HTTP grammar divided in tokens
+    The states reflect the structure of the HTTP grammar divided in tokens
 
     Each "foo_trans" function defined in this file takes the current input and state, does the transition and any  
     extra output/effect/check needed.
@@ -12,6 +11,10 @@
     When a request structure (e.g. method, uri or header field name) exceeds my servers' char array limits, a 400 response is set.
     On invalid headers, a 400 response is set.
 */
+
+// Test functions prototypes
+int test_method(char *method);
+int test_uri(char *uri, char *filename);
 
 
 // HTTP tspecials chaaracters
@@ -31,19 +34,23 @@ char CTLs[CTLS] = {
 void method_trans(char current, enum states *state, int *n, char *method)
 {
     if (current == '\r' || current == '\n')
-        *state = FAILURE;
+        *state = FAILURE_400;
     else if (*n == 0 && (current == ' ' || current == '\t'))
         *state = METHOD; 
     else if (*n <= MAX_METHOD && (current == ' ' || current == '\t'))
     {
         method[*n] = '\0'; 
-        if (!strcmp(method, "GET") || !strcmp(method, "HEAD") || !strcmp(method, "POST"))
-            *state  = URI;
+        // test method
+        int test = test_method(method);
+        if (test == 501)
+            *state = FAILURE_501_METHOD;
+        else if (test == 400)
+            *state = FAILURE_400_METHOD;
         else
-            *state = FAILURE;
+            *state = URI;
     }
-    else if (*n == MAX_METHOD && (current != ' ' || current != '\t'))
-        *state = FAILURE;
+    else if (*n == MAX_METHOD && (current != ' ' && current != '\t'))
+        *state = FAILURE_400_METHOD;
     else 
     { // *n will never get to be > MAX_METHOD as its incremented by one, and state changes if it reaches MAX_METHOD
         *state = METHOD;
@@ -52,22 +59,28 @@ void method_trans(char current, enum states *state, int *n, char *method)
     }
 }
 
-void uri_trans(char current, enum states *state, int *n, char *uri)
+void uri_trans(char current, enum states *state, int *n, char *uri, char *filename)
 {
     if (current == '\r' || current == '\n')
-        *state = FAILURE;
+        *state = FAILURE_400;
     else if (*n == 0 && (current == ' ' || current == '\t'))
         *state = URI;
     else if (*n <= MAX_URI && (current == ' ' || current == '\t'))
     {
-        *state = VERSION;
         *(uri + *n) = '\0';
+        int test = test_uri(uri, filename);
+        if (test == 500)
+            *state = FAILURE_500;
+        else if (test == 400)
+            *state = FAILURE_400;
+        else
+            *state = VERSION;
     }
-    else if (*n < MAX_URI && (current != ' ' || current != '\t'))
+    else if (*n < MAX_URI && (current != ' ' && current != '\t'))
     {
         if (*n == 0 && current != '/')
         {
-            *state = FAILURE;
+            *state = FAILURE_400;
             *(uri) = '\0';
             return;
         }
@@ -76,17 +89,17 @@ void uri_trans(char current, enum states *state, int *n, char *uri)
         (*n)++;
     }
     else
-        *state = FAILURE;
+        *state = FAILURE_400;
 }
 
 void vers_trans(char current, enum states *state, int *n, char *vers)
 {
     if (current == '\n')
-        *state = FAILURE;
+        *state = FAILURE_400;
     else if (*n == 0 && (current == ' ' || current == '\t'))
         *state = VERSION;
     else if (*n < VERSION_LEN && current == '\r')
-        *state = FAILURE;
+        *state = FAILURE_400;
     else if (*n < VERSION_LEN && current != '\r')
     {
         *state = VERSION;
@@ -99,10 +112,10 @@ void vers_trans(char current, enum states *state, int *n, char *vers)
         if (!strcmp(vers, "HTTP/1.0") || !strcmp(vers, "HTTP/1.1"))
             *state = CR; 
         else
-            *state = FAILURE;
+            *state = FAILURE_400;
     }
     else
-        *state = FAILURE;
+        *state = FAILURE_400;
 }
 
 void cr_trans(char current, enum states *state)
@@ -110,7 +123,7 @@ void cr_trans(char current, enum states *state)
     if (current == '\n')
         *state = LF;
     else
-        *state = FAILURE;
+        *state = FAILURE_400;
 }
 
 void lf_trans(char **current, enum states *state, int *n)
@@ -121,14 +134,14 @@ void lf_trans(char **current, enum states *state, int *n)
         (*current)++;
     }
     else if (**current == '\n')
-        *state = FAILURE;
+        *state = FAILURE_400;
     else
     {
         for (int i = 0; i < CTLS; i++) 
         {
             if (**current == CTLs[i] || (i < TSPECIALS && **current == tspecials[i]))
             {
-                *state = FAILURE; // On invalid header field name, respond 400
+                *state = FAILURE_400; // On invalid header field name, respond 400
                 return;
             }
         }
@@ -146,7 +159,8 @@ void hf_trans(char current, enum states *state, int *n, int *n_value, header_nod
         {
             if (current == CTLs[i] || (i < TSPECIALS && current == tspecials[i]))
             {
-                *state = FAILURE; // On invalid header field name, respond 400
+                *state = FAILURE_400; // On invalid header field name, respond 400
+                free(node);
                 return;
             }
         }
@@ -161,14 +175,21 @@ void hf_trans(char current, enum states *state, int *n, int *n_value, header_nod
         *state = HVAL;
     }
     else // Longer than allowed header field names
-        *state = FAILURE;
+    {
+        free(node);
+        *state = FAILURE_400;
+    }
+        
 }
 
 
 void hval_trans(char current, enum states *state, int *n, header_node *node, header_node **list)
 {
     if (current == '\n')
-        *state = FAILURE;
+    {
+        *state = FAILURE_400;
+        free(node);
+    }
     else if (*n == 0 && (current == ' ' || current == '\t'))
         *state = HVAL;
     else if (*n < MAX_HEADER_VALUE && current != '\r')
@@ -184,7 +205,10 @@ void hval_trans(char current, enum states *state, int *n, header_node *node, hea
         push_node(list, node);
     }
     else // Longer than allowed header value
-        *state = FAILURE;
+    {
+        *state = FAILURE_400;
+        free(node);
+    }
 }
 
 void cr_f_trans(char current, enum states *state)
@@ -192,5 +216,42 @@ void cr_f_trans(char current, enum states *state)
     if (current == '\n')
         *state = LF_F;
     else
-        *state = FAILURE;
+        *state = FAILURE_400;
+}
+
+// Below i define some test funtions used inside the transitions
+
+// Tests the validity of parsed method and returns 0 at success or the corresponging code at failure.
+int test_method(char *method)
+{
+    if (!strcmp(method , "POST") || !strcmp(method , "HEAD"))
+        return 501;
+    else if (strcmp(method, "GET"))
+        return 400;
+    else
+        return 0;
+}
+
+
+// Tests the validity of parsed URI and returns 0 at success or the corresponging code at failure.
+// Also extracts the filename from the uri
+int test_uri(char *uri, char *filename)
+{
+
+    if (!strcmp(uri, "/")) // uri = /
+        strcpy(filename, "index.html");
+    else if (uri[strlen(uri) - 1] == '/') // uri ends in /
+    {
+        int tmp_len = strlen(uri) + strlen("index.html"), size;
+        char tmp[tmp_len];
+        if (tmp_len > MAX_URI) // tmp len includes the null termination byte in its calculation
+            return 400;
+        else if ((size = snprintf(tmp, tmp_len,"%s%s", (uri + 1), "index.html")) < 0 || size >= tmp_len)
+            return 500;
+        else 
+            strcpy(filename, tmp);
+    } // uri doesnt end in /
+    else
+        strcpy(filename, (uri + 1)); 
+    return 0;   
 }

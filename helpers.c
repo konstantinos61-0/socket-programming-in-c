@@ -144,7 +144,7 @@ int read_request(int client_sockfd, char **buf, int *len)
         if (bytes_total >= *len)
         {
             // Reallocate more memory.
-            if  (ralloc > MAX_REALLOC)
+            if  (ralloc >= MAX_REALLOC)
             {
                 return -3;
             }
@@ -170,6 +170,7 @@ int read_request(int client_sockfd, char **buf, int *len)
         return -2;
     }
 }
+
 // Inserts header_node n into the top of the header_node stack (linked list)
 // On success, returns the pointer to the first list item (pointed to by list variable)
 void push_node(header_node **list, header_node *n)
@@ -199,13 +200,17 @@ void free_list(header_node *list)
 }
 
 // Fills list with supported, valid response headers. Systematic Response header handling
-void fill_response_headers(int filefd, char *filename, header_node **list, int *msg_len)
+// On success returns 0, on error returns -1. (when errors occured in neccessary headers)
+// -1 corresponds to closing connection without pursuing further sends.
+int fill_response_headers(int filefd, char *filename, header_node **list, int *msg_len)
 {
     for (int i = 0; i < SUPP_RESP_HEADS; i++)
     {
         if (!strcmp(supported_response_headers[i], "content-type")) 
         {
             header_node *n = malloc(sizeof(header_node));
+            if (n == NULL)
+                return -1;
             strcpy(n->header_field, "Content-Type");
             strcpy(n->header_value, mime_type(filename));
             push_node(list, n);
@@ -213,6 +218,8 @@ void fill_response_headers(int filefd, char *filename, header_node **list, int *
         else if (!strcmp(supported_response_headers[i], "connection"))
         {
             header_node *n = malloc(sizeof(header_node));
+            if (n == NULL)
+                return -1;
             strcpy(n->header_field, "Connection");
             strcpy(n->header_value, "close");
             push_node(list, n);
@@ -221,19 +228,23 @@ void fill_response_headers(int filefd, char *filename, header_node **list, int *
         {
             struct stat statbuf;
             if (fstat(filefd, &statbuf) == -1)
-                continue;
+                return -1;
             header_node *n = malloc(sizeof(header_node));
+            if (n == NULL)
+                return -1;
             strcpy(n->header_field, "Content-Length");
             // Find length
-            char length_s[10];
+            int len = 11;
+            char length_s[len]; // Serves files up to (< 10) Giga bytes
+            int size;
             long int length = (msg_len) ? (statbuf.st_size + *msg_len) : statbuf.st_size;
-            sprintf(length_s, "%li", length);
+            if ((size = snprintf(length_s, len,"%li", length)) < 0 || size >= len)
+                return -1; 
             strcpy(n->header_value, length_s);
             push_node(list, n);
         }
     }
-
-
+    return 0;
 }
 
 
@@ -248,58 +259,36 @@ char *mime_type(char *filename)
     ext_len = strlen(ext);
     if (ext_len == 0)
         return "application/octet-stream";
-    char *lowerc_ext = malloc (ext_len + 1);
+    char lowerc_ext[ext_len + 1];
     for (int i = 0; i < ext_len + 1; i++)
     {
         *(lowerc_ext + i) = tolower(*(ext + i));
     }
     if (!strcmp(lowerc_ext, "html"))
-    {
-        free(lowerc_ext);
         return "text/html";
-    }
     else if (!strcmp(lowerc_ext, "jpeg") || !strcmp(lowerc_ext, "jpg"))
-    {
-        free(lowerc_ext);
         return "image/jpeg";
-    }
     else if (!strcmp(lowerc_ext, "png"))
-    {
-        free(lowerc_ext);
         return "image/png";
-    }
     else if (!strcmp(lowerc_ext, "mp4"))
-    {
-        free(lowerc_ext);
         return "video/mp4";
-    }
     else if (!strcmp(lowerc_ext, "mp3"))
-    {
-        free(lowerc_ext);
         return "audio/mpeg";
-    }
     else if (!strcmp(lowerc_ext, "pdf"))
-    {
-        free(lowerc_ext);
         return "application/pdf";
-    }
     else if (!strcmp(lowerc_ext, "css"))
-    {
-        free(lowerc_ext);
         return "text/css";
-    }
     else
-    {
-        free(lowerc_ext);
         return "application/octet-stream";
-    }
 }
 
 /*
     Sends the filefd's contents to the client socket as well as all response headers beforehand.
     after inserting msg into the  <p id="msg"> tag of the file. 
-    In the function's use, filefd is passed by default as the error.html template in the templates folder,
+    In the function's use inside this project, filefd is always passed as the error.html template in the templates folder,
+    which grants knowledge about the contents that the function is handling.
     Returns 0 on success, -1 on error.
+    -1 corresponds to not pursuing further sends and closing connection
 */  
 int serve_error_template(int client_sockfd, int filefd, char *msg, char *filename)
 {
@@ -316,18 +305,24 @@ int serve_error_template(int client_sockfd, int filefd, char *msg, char *filenam
     header_node *res_h_list = NULL;
 
     // Send response headers
-    fill_response_headers(filefd, filename, &res_h_list, &msg_len); // Fill and send response headers 
+    if (fill_response_headers(filefd, filename, &res_h_list, &msg_len) == -1) // Fill and send response headers
+        return -1;  
     // Loop into linked list and send each
     for (header_node *p = res_h_list; p != NULL; p = p->next)
     {
-        char resp_header[MAX_HEADER_FIELD + MAX_HEADER_VALUE + 5]; // +4 for the 4 extra chars from field, value. +1 for '\0'
-        sprintf(resp_header,"%s: %s\r\n", p->header_field, p->header_value);
+        int header_len = MAX_HEADER_FIELD + MAX_HEADER_VALUE + 5; // +4 for the 4 extra chars other than field, value and +1 for '\0'
+        char resp_header[header_len];
+        int size; 
+        if ((size = snprintf(resp_header, header_len, "%s: %s\r\n", p->header_field, p->header_value)) < 0 || size >= header_len)
+            return -1;
         int rhlen = strlen(resp_header);
-        send_all(client_sockfd, resp_header, &rhlen);
+        if (send_all(client_sockfd, resp_header, &rhlen) == -1)
+            return -1;
     }
     char *crlf = "\r\n";
     int crlf_len = strlen(crlf);
-    send_all(client_sockfd, crlf, &crlf_len);
+    if (send_all(client_sockfd, crlf, &crlf_len) == -1)
+        return -1;
 
     while ((bytes_read = read(filefd, buf, BUFF_SIZE * sizeof(char))) > 0)
     {
@@ -335,26 +330,33 @@ int serve_error_template(int client_sockfd, int filefd, char *msg, char *filenam
         {
             int offset_inc = (p - buf + 1) + strlen(tag);
             offset = offset + offset_inc; // offset equals the amount of bytes read before reaching the end of the opening tag (last char included).
-            send_all(client_sockfd, buf, &offset_inc);
+            if (send_all(client_sockfd, buf, &offset_inc) == -1)
+                return -1;
             break;
         }
         else
         {
             offset += bytes_read;
-            send_all(client_sockfd, buf, &bytes_read);
+            if (send_all(client_sockfd, buf, &bytes_read) == -1)
+                return -1; 
         }
 
     }
     if (bytes_read == -1)
         return -1;
     
-    send_all(client_sockfd, msg, &msg_len);
+    if (send_all(client_sockfd, msg, &msg_len) == -1)
+        return -1; 
 
-    lseek(filefd, offset, SEEK_SET);
+    if (lseek(filefd, offset, SEEK_SET) == -1)
+        return -1;
     while ((bytes_read = read(filefd, buf, BUFF_SIZE * sizeof(char))) > 0)
-        send_all(client_sockfd, buf, &bytes_read);
+    {
+        if (send_all(client_sockfd, buf, &bytes_read) == -1)
+            return -1;
+    }
     if (bytes_read == -1)
         return -1;
-
+    free_list(res_h_list);
     return 0;
 }

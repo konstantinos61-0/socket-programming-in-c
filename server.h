@@ -7,12 +7,14 @@
 
 #include <sys/socket.h> 
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <sys/stat.h>
 
 #include <arpa/inet.h> 
 #include <netinet/in.h> 
 #include <netdb.h>
 
+#include <signal.h>
 #include <stdint.h>     
 #include <unistd.h>
 #include <fcntl.h>
@@ -21,6 +23,7 @@
 
 // Macros, global variables
 
+
 // socket 
 #define MY_PORT "8080"
 #define BACKLOG 15
@@ -28,13 +31,10 @@
 #define MAX_REALLOC 5
 
 // Parser (FSM) 
-#define INPUTS 128
-#define STATES FAILURE + 1
 enum states {
-    METHOD, URI, VERSION, CR, LF, HF, HVAL, CR_F, LF_F, FAILURE
+    METHOD, URI, VERSION, CR, LF, HF, HVAL, CR_F, LF_F, FAILURE_400, FAILURE_403, FAILURE_404, FAILURE_500, FAILURE_501,
+    FAILURE_400_METHOD, FAILURE_501_METHOD
 };
-
-
 
 // Lengths of various HTTP contructs
 #define RESPONSE_LINE_LEN 256
@@ -46,17 +46,16 @@ enum states {
 #define MAX_URI 256
 
 
-
 // structs
 
-// Response information
-struct response_line {
+// Stores response line information
+typedef struct response_line {
     int code;
     char *phrase;
     char *msg;
-};
+} response_line;
 
-// Represent a specific header field name - value pair
+// Stores header field name - value pairs 
 typedef struct header_node {
     char header_field[MAX_HEADER_FIELD + 1];
     char header_value[MAX_HEADER_VALUE + 1];
@@ -64,15 +63,13 @@ typedef struct header_node {
 } header_node;
 
 
-
-
 // Prototypes
 
-void handle_connection(int client_sockfd, int root_dir);
 
+void handle_connection(int client_sockfd, int root_dir);
 // Parser functions
 void method_trans(char current, enum states *state, int *n, char *method);
-void uri_trans(char current, enum states *state, int *n, char *filename);
+void uri_trans(char current, enum states *state, int *n, char *uri, char *filename);
 void vers_trans(char current, enum states *state, int *n, char *vers);
 void cr_trans(char current, enum states *state);
 void lf_trans(char **current, enum states *state, int *n);
@@ -86,7 +83,7 @@ int bind_to_port(int family, int socktype, const char *port);
 void *get_sin_addr(struct sockaddr *p);
 
 // Helper functions associated with request/response handling
-void fill_response_headers(int filefd, char *filename, header_node **list, int *msg_len);
+int fill_response_headers(int filefd, char *filename, header_node **list, int *msg_len);
 int read_request(int client_sockfd, char **buf, int *len);
 char *mime_type(char *filename);
 int serve_error_template(int client_fd, int filefd, char *msg, char *filename);
